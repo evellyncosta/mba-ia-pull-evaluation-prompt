@@ -45,24 +45,54 @@ def extract_json_from_response(response_text: str) -> Dict[str, Any]:
     """
     Extrai JSON de uma resposta de LLM que pode conter texto adicional.
     """
+    cleaned_text = response_text.strip()
+
+    fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned_text, re.DOTALL)
+    if fenced_match:
+        cleaned_text = fenced_match.group(1).strip()
+
     try:
-        # Tentar parsear diretamente
-        return json.loads(response_text)
+        return json.loads(cleaned_text)
     except json.JSONDecodeError:
-        # Tentar encontrar JSON no meio do texto
-        start = response_text.find('{')
-        end = response_text.rfind('}') + 1
+        pass
 
-        if start != -1 and end > start:
-            try:
-                json_str = response_text[start:end]
-                return json.loads(json_str)
-            except json.JSONDecodeError:
-                pass
+    start_positions = [match.start() for match in re.finditer(r"\{", cleaned_text)]
+    for start in start_positions:
+        depth = 0
+        in_string = False
+        escape = False
 
-        # Se não conseguir extrair, retornar valores default
-        print(f"⚠️  Não foi possível extrair JSON da resposta: {response_text[:200]}...")
-        return {"score": 0.0, "reasoning": "Erro ao processar resposta"}
+        for index in range(start, len(cleaned_text)):
+            char = cleaned_text[index]
+
+            if escape:
+                escape = False
+                continue
+
+            if char == "\\" and in_string:
+                escape = True
+                continue
+
+            if char == '"':
+                in_string = not in_string
+                continue
+
+            if in_string:
+                continue
+
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = cleaned_text[start:index + 1]
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        break
+
+    print(f"⚠️  Não foi possível extrair JSON da resposta: {cleaned_text[:200]}...")
+    return {"score": 0.0, "reasoning": "Erro ao processar resposta"}
 
 
 def evaluate_f1_score(question: str, answer: str, reference: str) -> Dict[str, Any]:

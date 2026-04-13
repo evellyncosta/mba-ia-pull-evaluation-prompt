@@ -8,8 +8,10 @@ import json
 from typing import Dict, Any, Optional
 from pathlib import Path
 from dotenv import load_dotenv
+from google_retry_patch import patch_langchain_google_genai_retry
 
 load_dotenv()
+patch_langchain_google_genai_retry()
 
 
 def load_yaml(file_path: str) -> Optional[Dict[str, Any]]:

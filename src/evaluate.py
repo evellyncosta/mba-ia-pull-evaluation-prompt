@@ -1,5 +1,5 @@
 """
-Script COMPLETO para avaliar prompts otimizados.
+Script COMPLETO para avaliar prompts otimizados usando OpenAI.
 
 Este script:
 1. Carrega dataset de avaliação de arquivo .jsonl (datasets/bug_to_user_story.jsonl)
@@ -9,31 +9,42 @@ Este script:
 5. Calcula 5 métricas (Helpfulness, Correctness, F1-Score, Clarity, Precision)
 6. Publica resultados no dashboard do LangSmith
 7. Exibe resumo no terminal
-
-Suporta múltiplos providers de LLM:
-- OpenAI (gpt-4o, gpt-4o-mini)
-- Google Gemini (gemini-1.5-flash, gemini-1.5-pro)
-
-Configure o provider no arquivo .env através da variável LLM_PROVIDER.
 """
 
 import os
 import sys
 import json
+import time
 from typing import List, Dict, Any
 from pathlib import Path
 from dotenv import load_dotenv
 from langsmith import Client
 from langchain import hub
 from langchain_core.prompts import ChatPromptTemplate
-from utils import check_env_vars, format_score, print_section_header, get_llm as get_configured_llm
+from langchain_openai import ChatOpenAI
+from utils import check_env_vars, format_score, print_section_header
 from metrics import evaluate_f1_score, evaluate_clarity, evaluate_precision
 
 load_dotenv()
 
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
+REQUEST_PAUSE_SECONDS = float(os.getenv("REQUEST_PAUSE_SECONDS", "1.5"))
+
 
 def get_llm():
-    return get_configured_llm(temperature=0)
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "OPENAI_API_KEY não configurada no .env\n"
+            "Obtenha uma chave em: https://platform.openai.com/api-keys"
+        )
+
+    model_name = os.getenv("LLM_MODEL", DEFAULT_OPENAI_MODEL)
+    return ChatOpenAI(
+        model=model_name,
+        temperature=0,
+        api_key=api_key
+    )
 
 
 def load_dataset_from_jsonl(jsonl_path: str) -> List[Dict[str, Any]]:
@@ -204,7 +215,9 @@ def evaluate_prompt(
 
             if result["answer"]:
                 f1 = evaluate_f1_score(result["question"], result["answer"], result["reference"])
+                time.sleep(REQUEST_PAUSE_SECONDS)
                 clarity = evaluate_clarity(result["question"], result["answer"], result["reference"])
+                time.sleep(REQUEST_PAUSE_SECONDS)
                 precision = evaluate_precision(result["question"], result["answer"], result["reference"])
 
                 f1_scores.append(f1["score"])
@@ -212,6 +225,9 @@ def evaluate_prompt(
                 precision_scores.append(precision["score"])
 
                 print(f"      [{i}/{min(10, len(examples))}] F1:{f1['score']:.2f} Clarity:{clarity['score']:.2f} Precision:{precision['score']:.2f}")
+
+            if i < min(10, len(examples)):
+                time.sleep(REQUEST_PAUSE_SECONDS)
 
         avg_f1 = sum(f1_scores) / len(f1_scores) if f1_scores else 0.0
         avg_clarity = sum(clarity_scores) / len(clarity_scores) if clarity_scores else 0.0
@@ -273,19 +289,19 @@ def display_results(prompt_name: str, scores: Dict[str, float]) -> bool:
 def main():
     print_section_header("AVALIAÇÃO DE PROMPTS OTIMIZADOS")
 
+    os.environ["LLM_PROVIDER"] = "openai"
+    os.environ["LLM_MODEL"] = DEFAULT_OPENAI_MODEL
+    os.environ.setdefault("EVAL_MODEL", os.environ["LLM_MODEL"])
+
     provider = os.getenv("LLM_PROVIDER", "openai")
-    llm_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
-    eval_model = os.getenv("EVAL_MODEL", "gpt-4o")
+    llm_model = os.getenv("LLM_MODEL", DEFAULT_OPENAI_MODEL)
+    eval_model = os.getenv("EVAL_MODEL", llm_model)
 
     print(f"Provider: {provider}")
     print(f"Modelo Principal: {llm_model}")
     print(f"Modelo de Avaliação: {eval_model}\n")
 
-    required_vars = ["LANGSMITH_API_KEY", "LLM_PROVIDER"]
-    if provider == "openai":
-        required_vars.append("OPENAI_API_KEY")
-    elif provider in ["google", "gemini"]:
-        required_vars.append("GOOGLE_API_KEY")
+    required_vars = ["LANGSMITH_API_KEY", "LLM_PROVIDER", "OPENAI_API_KEY"]
 
     if not check_env_vars(required_vars):
         return 1
